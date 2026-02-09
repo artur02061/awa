@@ -135,7 +135,7 @@ class BleService {
     _scanResultsController.add([]);
     _continuousScanning = true;
     try {
-      await blePlugin.startScan(10 * 1000);
+      await blePlugin.startScan(30 * 1000);
     } catch (e) {
       _continuousScanning = false;
       _errorController.add('Ошибка сканирования: $e');
@@ -153,7 +153,7 @@ class BleService {
   Future<void> _restartScan() async {
     if (!_continuousScanning) return;
     try {
-      await blePlugin.startScan(10 * 1000);
+      await blePlugin.startScan(30 * 1000);
     } catch (e) {
       _continuousScanning = false;
       _errorController.add('Ошибка сканирования: $e');

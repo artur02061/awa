@@ -11,11 +11,13 @@ class DiscoveredDevice {
   final String name;
   final String address;
   final int rssi;
+  final String source; // 'fbp' or 'moyoung' — for debugging
 
   DiscoveredDevice({
     required this.name,
     required this.address,
     required this.rssi,
+    this.source = '',
   });
 }
 
@@ -64,6 +66,20 @@ class BleService {
     if (_initialized) return;
     _initialized = true;
 
+    // MoYoung scan listener — catch devices from plugin's own scan
+    _subscriptions.add(
+      blePlugin.bleScanEveStm.listen((BleScanBean event) {
+        if (!event.isCompleted) {
+          _addDevice(
+            name: event.name ?? '',
+            address: event.address ?? '',
+            rssi: -60, // moyoung doesn't expose rssi
+            source: 'moyoung',
+          );
+        }
+      }),
+    );
+
     // Connection state listener (moyoung plugin)
     _subscriptions.add(
       blePlugin.connStateEveStm.listen((ConnectStateBean event) {
@@ -77,7 +93,6 @@ class BleService {
           _queryDeviceInfo();
           _saveLastDevice();
         } else if (wasConnected) {
-          // Unexpected disconnect
           batteryLevel = -1;
           firmwareVersion = '';
           _errorController.add('Часы отключились');
@@ -110,6 +125,24 @@ class BleService {
     );
   }
 
+  /// Add a device to list (deduplicated by address)
+  void _addDevice({
+    required String name,
+    required String address,
+    required int rssi,
+    required String source,
+  }) {
+    if (address.isEmpty) return;
+    if (_devices.any((d) => d.address == address)) return;
+    _devices.add(DiscoveredDevice(
+      name: name,
+      address: address,
+      rssi: rssi,
+      source: source,
+    ));
+    _scanResultsController.add(List.from(_devices));
+  }
+
   /// Handle file transfer events
   void _handleFileTransEvent(FileTransBean event) {
     if (event.error != null && event.error! > 0) {
@@ -122,7 +155,7 @@ class BleService {
     }
   }
 
-  // ──────────── Scanning (flutter_blue_plus — all devices) ────────────
+  // ──────────── Scanning (dual: flutter_blue_plus + moyoung) ────────────
 
   bool get isScanning => _continuousScanning;
 
@@ -131,37 +164,60 @@ class BleService {
     _scanResultsController.add([]);
     _continuousScanning = true;
 
+    // --- FlutterBluePlus scan (all BLE devices) ---
     _fbpScanSubscription?.cancel();
-    _fbpScanSubscription = FlutterBluePlus.onScanResults.listen((results) {
+    _fbpScanSubscription = FlutterBluePlus.scanResults.listen((results) {
       for (final r in results) {
         final address = r.device.remoteId.str;
         final name = r.device.platformName.isNotEmpty
             ? r.device.platformName
             : r.advertisementData.advName;
-        if (!_devices.any((d) => d.address == address)) {
-          _devices.add(DiscoveredDevice(
-            name: name.isNotEmpty ? name : '',
-            address: address,
-            rssi: r.rssi,
-          ));
-          _scanResultsController.add(List.from(_devices));
-        }
+        _addDevice(
+          name: name,
+          address: address,
+          rssi: r.rssi,
+          source: 'fbp',
+        );
       }
     });
 
+    // Start FlutterBluePlus scan (non-blocking — don't await)
+    _startFbpScan();
+
+    // --- MoYoung scan in parallel (filtered to compatible watches) ---
+    _startMoyoungScan();
+  }
+
+  /// Start/restart FlutterBluePlus scan cycle
+  Future<void> _startFbpScan() async {
+    if (!_continuousScanning) return;
     try {
       await FlutterBluePlus.startScan(
         timeout: const Duration(seconds: 30),
         androidUsesFineLocation: true,
       );
-      // Scan cycle finished — restart if continuous
+      // Cycle finished — restart if still active
       if (_continuousScanning) {
-        _restartScan();
+        _startFbpScan();
       }
     } catch (e) {
-      _continuousScanning = false;
-      _fbpScanSubscription?.cancel();
-      _errorController.add('Ошибка сканирования: $e');
+      print('FlutterBluePlus scan error: $e');
+      // Don't stop _continuousScanning — moyoung scan may still work
+    }
+  }
+
+  /// Start/restart MoYoung plugin scan cycle
+  Future<void> _startMoyoungScan() async {
+    if (!_continuousScanning) return;
+    try {
+      await blePlugin.startScan(30 * 1000);
+      // Scan completed — restart if still active
+      if (_continuousScanning) {
+        _startMoyoungScan();
+      }
+    } catch (e) {
+      print('MoYoung scan error: $e');
+      // Don't stop — fbp scan may still work
     }
   }
 
@@ -171,25 +227,9 @@ class BleService {
     try {
       await FlutterBluePlus.stopScan();
     } catch (_) {}
-  }
-
-  /// Restart scan without clearing found devices
-  Future<void> _restartScan() async {
-    if (!_continuousScanning) return;
     try {
-      await FlutterBluePlus.startScan(
-        timeout: const Duration(seconds: 30),
-        androidUsesFineLocation: true,
-      );
-      // Cycle finished — restart again if still active
-      if (_continuousScanning) {
-        _restartScan();
-      }
-    } catch (e) {
-      _continuousScanning = false;
-      _fbpScanSubscription?.cancel();
-      _errorController.add('Ошибка сканирования: $e');
-    }
+      await blePlugin.cancelScan;
+    } catch (_) {}
   }
 
   // ──────────── Connection (moyoung plugin) ────────────

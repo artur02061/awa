@@ -36,7 +36,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   void didChangeAppLifecycleState(AppLifecycleState state) {
     // When app comes back to foreground, refresh connection state
     if (state == AppLifecycleState.resumed && _isConnected) {
-      _bleService.blePlugin.queryDeviceBattery();
+      _bleService.blePlugin.queryDeviceBattery;
     }
   }
 

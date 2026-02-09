@@ -50,9 +50,15 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
 
     _subs.add(_bleService.connectionState.listen((connected) {
       if (!mounted) return;
+      if (connected) {
+        _bleService.stopScan();
+      }
       setState(() {
         _isConnected = connected;
         _isConnecting = _bleService.isConnecting;
+        if (connected) {
+          _isScanning = false;
+        }
       });
       if (connected) {
         _showSnackBar('Подключено к ${_bleService.connectedName}!', Colors.green);
@@ -167,20 +173,22 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
         setState(() => _isScanning = false);
         _showSnackBar('Ошибка запуска поиска: $e', Colors.redAccent);
       }
-      return;
     }
+  }
 
-    Future.delayed(const Duration(seconds: 10), () {
-      if (mounted) {
-        setState(() => _isScanning = false);
-        _bleService.stopScan();
-      }
-    });
+  Future<void> _stopScan() async {
+    await _bleService.stopScan();
+    if (mounted) {
+      setState(() => _isScanning = false);
+    }
   }
 
   Future<void> _connectToDevice(String address, String name) async {
     if (_isConnecting) return;
-    setState(() => _isConnecting = true);
+    setState(() {
+      _isConnecting = true;
+      _isScanning = false;
+    });
     await _bleService.stopScan();
     await _bleService.connect(address, name);
   }
@@ -444,20 +452,28 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
           // Scan button
           SizedBox(
             height: 50,
-            child: ElevatedButton.icon(
-              onPressed: (_isScanning || _isConnecting) ? null : _startScan,
-              icon: _isScanning
-                  ? const SizedBox(
+            child: _isScanning
+                ? OutlinedButton.icon(
+                    onPressed: _isConnecting ? null : _stopScan,
+                    style: OutlinedButton.styleFrom(
+                      side: const BorderSide(color: Colors.tealAccent),
+                      foregroundColor: Colors.tealAccent,
+                    ),
+                    icon: const SizedBox(
                       width: 20,
                       height: 20,
                       child: CircularProgressIndicator(
                         strokeWidth: 2,
-                        color: Colors.black,
+                        color: Colors.tealAccent,
                       ),
-                    )
-                  : const Icon(Icons.bluetooth_searching),
-              label: Text(_isScanning ? 'Поиск...' : 'Начать поиск'),
-            ),
+                    ),
+                    label: const Text('Остановить поиск'),
+                  )
+                : ElevatedButton.icon(
+                    onPressed: _isConnecting ? null : _startScan,
+                    icon: const Icon(Icons.bluetooth_searching),
+                    label: const Text('Начать поиск'),
+                  ),
           ),
           const SizedBox(height: 20),
 

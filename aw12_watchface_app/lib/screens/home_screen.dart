@@ -80,36 +80,70 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   }
 
   Future<bool> _requestPermissions() async {
-    final statuses = await [
-      Permission.bluetoothScan,
-      Permission.bluetoothConnect,
-      Permission.location,
-    ].request();
+    try {
+      // Check if Bluetooth adapter is turned on
+      final btServiceStatus = await Permission.bluetooth.serviceStatus;
+      if (btServiceStatus != ServiceStatus.enabled) {
+        if (mounted) {
+          _showSnackBar(
+            'Включите Bluetooth для поиска часов',
+            Colors.orange,
+          );
+        }
+        return false;
+      }
 
-    final denied = statuses.entries
-        .where((e) => e.value.isDenied || e.value.isPermanentlyDenied)
-        .toList();
+      // Check if Location services are enabled (required for BLE scanning on Android)
+      final locationServiceStatus = await Permission.location.serviceStatus;
+      if (locationServiceStatus != ServiceStatus.enabled) {
+        if (mounted) {
+          _showSnackBar(
+            'Включите геолокацию — Android требует её для поиска Bluetooth-устройств',
+            Colors.orange,
+          );
+        }
+        return false;
+      }
 
-    if (denied.isNotEmpty) {
+      final statuses = await [
+        Permission.bluetoothScan,
+        Permission.bluetoothConnect,
+        Permission.location,
+      ].request();
+
+      final denied = statuses.entries
+          .where((e) => e.value.isDenied || e.value.isPermanentlyDenied)
+          .toList();
+
+      if (denied.isNotEmpty) {
+        if (mounted) {
+          final permanentlyDenied = denied.any((e) => e.value.isPermanentlyDenied);
+          _showSnackBar(
+            permanentlyDenied
+                ? 'Откройте настройки и разрешите доступ к Bluetooth и геолокации'
+                : 'Для работы нужны разрешения Bluetooth и геолокации',
+            Colors.orange,
+            action: permanentlyDenied
+                ? SnackBarAction(
+                    label: 'Настройки',
+                    textColor: Colors.white,
+                    onPressed: () => openAppSettings(),
+                  )
+                : null,
+          );
+        }
+        return false;
+      }
+      return true;
+    } catch (e) {
       if (mounted) {
-        final permanentlyDenied = denied.any((e) => e.value.isPermanentlyDenied);
         _showSnackBar(
-          permanentlyDenied
-              ? 'Откройте настройки и разрешите доступ к Bluetooth и геолокации'
-              : 'Для работы нужны разрешения Bluetooth и геолокации',
-          Colors.orange,
-          action: permanentlyDenied
-              ? SnackBarAction(
-                  label: 'Настройки',
-                  textColor: Colors.white,
-                  onPressed: () => openAppSettings(),
-                )
-              : null,
+          'Ошибка при запросе разрешений: $e',
+          Colors.redAccent,
         );
       }
       return false;
     }
-    return true;
   }
 
   Future<void> _startScan() async {
@@ -121,7 +155,15 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
       _devices = [];
     });
 
-    await _bleService.startScan();
+    try {
+      await _bleService.startScan();
+    } catch (e) {
+      if (mounted) {
+        setState(() => _isScanning = false);
+        _showSnackBar('Ошибка запуска поиска: $e', Colors.redAccent);
+      }
+      return;
+    }
 
     Future.delayed(const Duration(seconds: 10), () {
       if (mounted) {

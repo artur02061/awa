@@ -201,7 +201,7 @@ class BleService {
       print('Error querying firmware: $e');
     }
     try {
-      blePlugin.queryDeviceBattery();
+      await blePlugin.queryDeviceBattery();
     } catch (e) {
       print('Error querying battery: $e');
     }

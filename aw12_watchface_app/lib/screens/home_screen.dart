@@ -1,6 +1,5 @@
 import 'dart:async';
 import 'package:flutter/material.dart';
-import 'package:moyoung_ble_plugin/moyoung_ble.dart';
 import 'package:permission_handler/permission_handler.dart';
 import '../services/ble_service.dart';
 import 'watchface_gallery_screen.dart';
@@ -14,7 +13,7 @@ class HomeScreen extends StatefulWidget {
 
 class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   final BleService _bleService = BleService();
-  List<BleScanBean> _devices = [];
+  List<DiscoveredDevice> _devices = [];
   bool _isScanning = false;
   bool _isConnected = false;
   bool _isConnecting = false;
@@ -585,19 +584,28 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   }
 
   Widget _buildDeviceList() {
-    // Sort: AW12 devices first
-    final sorted = List<BleScanBean>.from(_devices);
+    // Sort: named devices first, then by signal strength
+    final sorted = List<DiscoveredDevice>.from(_devices);
     sorted.sort((a, b) {
-      final aIsAW = (a.name ?? '').toUpperCase().contains('AW12') ? 0 : 1;
-      final bIsAW = (b.name ?? '').toUpperCase().contains('AW12') ? 0 : 1;
-      return aIsAW.compareTo(bIsAW);
+      // Named devices first
+      final aHasName = a.name.isNotEmpty ? 0 : 1;
+      final bHasName = b.name.isNotEmpty ? 0 : 1;
+      if (aHasName != bHasName) return aHasName.compareTo(bHasName);
+      // AW12 devices on top
+      final aIsAW = a.name.toUpperCase().contains('AW12') ? 0 : 1;
+      final bIsAW = b.name.toUpperCase().contains('AW12') ? 0 : 1;
+      if (aIsAW != bIsAW) return aIsAW.compareTo(bIsAW);
+      // Then by signal strength (higher RSSI = closer)
+      return b.rssi.compareTo(a.rssi);
     });
 
     return ListView.builder(
       itemCount: sorted.length,
       itemBuilder: (context, index) {
         final device = sorted[index];
-        final name = device.name ?? 'Неизвестное устройство';
+        final name = device.name.isNotEmpty
+            ? device.name
+            : 'Неизвестное устройство';
         final isAW12 = name.toUpperCase().contains('AW12');
         final isThisConnecting =
             _isConnecting && _bleService.connectedAddress == device.address;
@@ -622,7 +630,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
               ),
             ),
             subtitle: Text(
-              device.address ?? '',
+              '${device.address}  ${device.rssi} dBm',
               style: TextStyle(color: Colors.white.withValues(alpha: 0.5)),
             ),
             trailing: isThisConnecting
@@ -635,8 +643,8 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                     onPressed: _isConnecting
                         ? null
                         : () => _connectToDevice(
-                              device.address!,
-                              device.name ?? 'Unknown',
+                              device.address,
+                              device.name.isNotEmpty ? device.name : 'Unknown',
                             ),
                     style: ElevatedButton.styleFrom(
                       backgroundColor:
@@ -647,8 +655,8 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
             onTap: _isConnecting
                 ? null
                 : () => _connectToDevice(
-                      device.address!,
-                      device.name ?? 'Unknown',
+                      device.address,
+                      device.name.isNotEmpty ? device.name : 'Unknown',
                     ),
           ),
         );

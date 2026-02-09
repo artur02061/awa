@@ -10,6 +10,7 @@ dependencies:
   flutter:
     sdk: flutter
   moyoung_ble_plugin: ^1.2.22
+  flutter_blue_plus: ^1.32.0
   permission_handler: ^11.0.1
   image_picker: ^1.0.4
   image: ^4.1.3

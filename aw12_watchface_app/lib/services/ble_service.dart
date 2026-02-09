@@ -1,9 +1,23 @@
 import 'dart:async';
 import 'dart:io';
 import 'dart:typed_data';
+import 'package:flutter_blue_plus/flutter_blue_plus.dart';
 import 'package:image/image.dart' as img;
 import 'package:moyoung_ble_plugin/moyoung_ble.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+
+/// Simple model for discovered BLE devices
+class DiscoveredDevice {
+  final String name;
+  final String address;
+  final int rssi;
+
+  DiscoveredDevice({
+    required this.name,
+    required this.address,
+    required this.rssi,
+  });
+}
 
 /// Singleton service for managing BLE connection to AW12 watch
 class BleService {
@@ -24,21 +38,22 @@ class BleService {
 
   // Stream controllers for UI updates
   final _connectionStateController = StreamController<bool>.broadcast();
-  final _scanResultsController = StreamController<List<BleScanBean>>.broadcast();
+  final _scanResultsController = StreamController<List<DiscoveredDevice>>.broadcast();
   final _batteryController = StreamController<int>.broadcast();
   final _watchFaceProgressController = StreamController<int>.broadcast();
   final _errorController = StreamController<String>.broadcast();
 
   Stream<bool> get connectionState => _connectionStateController.stream;
-  Stream<List<BleScanBean>> get scanResults => _scanResultsController.stream;
+  Stream<List<DiscoveredDevice>> get scanResults => _scanResultsController.stream;
   Stream<int> get battery => _batteryController.stream;
   Stream<int> get watchFaceProgress => _watchFaceProgressController.stream;
   Stream<String> get errors => _errorController.stream;
 
-  final List<BleScanBean> _devices = [];
+  final List<DiscoveredDevice> _devices = [];
   final List<StreamSubscription> _subscriptions = [];
   Timer? _connectionTimeout;
   bool _continuousScanning = false;
+  StreamSubscription? _fbpScanSubscription;
 
   // Prefs keys
   static const _keyLastAddress = 'last_device_address';
@@ -49,25 +64,7 @@ class BleService {
     if (_initialized) return;
     _initialized = true;
 
-    // Scan listener
-    _subscriptions.add(
-      blePlugin.bleScanEveStm.listen((BleScanBean event) {
-        if (event.isCompleted) {
-          _scanResultsController.add(List.from(_devices));
-          // Auto-restart scan for continuous searching
-          if (_continuousScanning) {
-            _restartScan();
-          }
-        } else {
-          if (!_devices.any((d) => d.address == event.address)) {
-            _devices.add(event);
-            _scanResultsController.add(List.from(_devices));
-          }
-        }
-      }),
-    );
-
-    // Connection state listener
+    // Connection state listener (moyoung plugin)
     _subscriptions.add(
       blePlugin.connStateEveStm.listen((ConnectStateBean event) {
         final wasConnected = isConnected;
@@ -98,7 +95,7 @@ class BleService {
       }),
     );
 
-    // Watch face background transfer progress (per plugin docs: fileTransEveStm)
+    // Watch face background transfer progress
     _subscriptions.add(
       blePlugin.fileTransEveStm.listen((FileTransBean event) {
         _handleFileTransEvent(event);
@@ -115,7 +112,6 @@ class BleService {
 
   /// Handle file transfer events
   void _handleFileTransEvent(FileTransBean event) {
-    // FileTransBean: type (int), progress (int?), error (int?)
     if (event.error != null && event.error! > 0) {
       _watchFaceProgressController.add(-1);
       _errorController.add('Ошибка передачи (код ${event.error})');
@@ -126,7 +122,7 @@ class BleService {
     }
   }
 
-  // ──────────── Scanning ────────────
+  // ──────────── Scanning (flutter_blue_plus — all devices) ────────────
 
   bool get isScanning => _continuousScanning;
 
@@ -134,18 +130,46 @@ class BleService {
     _devices.clear();
     _scanResultsController.add([]);
     _continuousScanning = true;
+
+    _fbpScanSubscription?.cancel();
+    _fbpScanSubscription = FlutterBluePlus.onScanResults.listen((results) {
+      for (final r in results) {
+        final address = r.device.remoteId.str;
+        final name = r.device.platformName.isNotEmpty
+            ? r.device.platformName
+            : r.advertisementData.advName;
+        if (!_devices.any((d) => d.address == address)) {
+          _devices.add(DiscoveredDevice(
+            name: name.isNotEmpty ? name : '',
+            address: address,
+            rssi: r.rssi,
+          ));
+          _scanResultsController.add(List.from(_devices));
+        }
+      }
+    });
+
     try {
-      await blePlugin.startScan(30 * 1000);
+      await FlutterBluePlus.startScan(
+        timeout: const Duration(seconds: 30),
+        androidUsesFineLocation: true,
+      );
+      // Scan cycle finished — restart if continuous
+      if (_continuousScanning) {
+        _restartScan();
+      }
     } catch (e) {
       _continuousScanning = false;
+      _fbpScanSubscription?.cancel();
       _errorController.add('Ошибка сканирования: $e');
     }
   }
 
   Future<void> stopScan() async {
     _continuousScanning = false;
+    _fbpScanSubscription?.cancel();
     try {
-      await blePlugin.cancelScan;
+      await FlutterBluePlus.stopScan();
     } catch (_) {}
   }
 
@@ -153,14 +177,22 @@ class BleService {
   Future<void> _restartScan() async {
     if (!_continuousScanning) return;
     try {
-      await blePlugin.startScan(30 * 1000);
+      await FlutterBluePlus.startScan(
+        timeout: const Duration(seconds: 30),
+        androidUsesFineLocation: true,
+      );
+      // Cycle finished — restart again if still active
+      if (_continuousScanning) {
+        _restartScan();
+      }
     } catch (e) {
       _continuousScanning = false;
+      _fbpScanSubscription?.cancel();
       _errorController.add('Ошибка сканирования: $e');
     }
   }
 
-  // ──────────── Connection ────────────
+  // ──────────── Connection (moyoung plugin) ────────────
 
   /// Connect with a 15-second timeout
   Future<void> connect(String address, String name) async {
@@ -243,7 +275,6 @@ class BleService {
   }
 
   /// Send custom watch face background image.
-  /// Loads, resizes to 240x240, converts to bitmap bytes.
   Future<void> sendWatchFaceBackground(String imagePath) async {
     final file = File(imagePath);
     if (!await file.exists()) {
@@ -254,11 +285,9 @@ class BleService {
     final original = img.decodeImage(bytes);
     if (original == null) throw Exception('Не удалось прочитать изображение');
 
-    // Resize main image and thumbnail
     final resized = img.copyResize(original, width: 240, height: 240);
     final thumbResized = img.copyResize(original, width: 80, height: 80);
 
-    // Encode as PNG bytes for the plugin
     final bitmapBytes = Uint8List.fromList(img.encodePng(resized));
     final thumbBytes = Uint8List.fromList(img.encodePng(thumbResized));
 
@@ -319,6 +348,7 @@ class BleService {
 
   void dispose() {
     _connectionTimeout?.cancel();
+    _fbpScanSubscription?.cancel();
     for (var sub in _subscriptions) {
       sub.cancel();
     }

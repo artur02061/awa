@@ -145,7 +145,7 @@ class BleService {
   Future<void> stopScan() async {
     _continuousScanning = false;
     try {
-      await blePlugin.cancelScan();
+      await blePlugin.cancelScan;
     } catch (_) {}
   }
 
@@ -194,7 +194,7 @@ class BleService {
   Future<void> disconnect() async {
     _connectionTimeout?.cancel();
     try {
-      await blePlugin.disconnect();
+      await blePlugin.disconnect;
     } catch (_) {}
     isConnected = false;
     isConnecting = false;
@@ -217,12 +217,12 @@ class BleService {
 
   Future<void> _queryDeviceInfo() async {
     try {
-      firmwareVersion = await blePlugin.queryFirmwareVersion();
+      firmwareVersion = await blePlugin.queryFirmwareVersion;
     } catch (e) {
       print('Error querying firmware: $e');
     }
     try {
-      await blePlugin.queryDeviceBattery();
+      await blePlugin.queryDeviceBattery;
     } catch (e) {
       print('Error querying battery: $e');
     }

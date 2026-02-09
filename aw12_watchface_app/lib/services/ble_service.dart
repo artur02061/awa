@@ -210,7 +210,7 @@ class BleService {
   // ──────────── Watch Face ────────────
 
   Future<int> getDisplayWatchFace() async {
-    return await blePlugin.queryDisplayWatchFace;
+    return await blePlugin.queryDisplayWatchFace();
   }
 
   Future<void> setDisplayWatchFace(int index) async {
@@ -218,7 +218,7 @@ class BleService {
   }
 
   Future<WatchFaceLayoutBean> getWatchFaceLayout() async {
-    return await blePlugin.queryWatchFaceLayout;
+    return await blePlugin.queryWatchFaceLayout();
   }
 
   /// Send custom watch face background image.

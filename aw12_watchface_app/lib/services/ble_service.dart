@@ -159,7 +159,7 @@ class BleService {
 
     try {
       await blePlugin.connect(ConnectBean(
-        autoConnect: true,
+        autoConnect: false,
         address: address,
       ));
     } catch (e) {

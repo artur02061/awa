@@ -36,7 +36,9 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   void didChangeAppLifecycleState(AppLifecycleState state) {
     // When app comes back to foreground, refresh connection state
     if (state == AppLifecycleState.resumed && _isConnected) {
-      _bleService.blePlugin.queryDeviceBattery();
+      try {
+        _bleService.blePlugin.queryDeviceBattery();
+      } catch (_) {}
     }
   }
 
@@ -48,9 +50,15 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
 
     _subs.add(_bleService.connectionState.listen((connected) {
       if (!mounted) return;
+      if (connected) {
+        _bleService.stopScan();
+      }
       setState(() {
         _isConnected = connected;
         _isConnecting = _bleService.isConnecting;
+        if (connected) {
+          _isScanning = false;
+        }
       });
       if (connected) {
         _showSnackBar('Подключено к ${_bleService.connectedName}!', Colors.green);
@@ -64,7 +72,10 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
 
     _subs.add(_bleService.errors.listen((error) {
       if (!mounted) return;
-      setState(() => _isConnecting = false);
+      setState(() {
+        _isConnecting = false;
+        _isScanning = false;
+      });
       _showSnackBar(error, Colors.redAccent);
     }));
   }
@@ -80,36 +91,70 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   }
 
   Future<bool> _requestPermissions() async {
-    final statuses = await [
-      Permission.bluetoothScan,
-      Permission.bluetoothConnect,
-      Permission.location,
-    ].request();
+    try {
+      // Check if Bluetooth adapter is turned on
+      final btServiceStatus = await Permission.bluetooth.serviceStatus;
+      if (btServiceStatus != ServiceStatus.enabled) {
+        if (mounted) {
+          _showSnackBar(
+            'Включите Bluetooth для поиска часов',
+            Colors.orange,
+          );
+        }
+        return false;
+      }
 
-    final denied = statuses.entries
-        .where((e) => e.value.isDenied || e.value.isPermanentlyDenied)
-        .toList();
+      // Check if Location services are enabled (required for BLE scanning on Android)
+      final locationServiceStatus = await Permission.location.serviceStatus;
+      if (locationServiceStatus != ServiceStatus.enabled) {
+        if (mounted) {
+          _showSnackBar(
+            'Включите геолокацию — Android требует её для поиска Bluetooth-устройств',
+            Colors.orange,
+          );
+        }
+        return false;
+      }
 
-    if (denied.isNotEmpty) {
+      final statuses = await [
+        Permission.bluetoothScan,
+        Permission.bluetoothConnect,
+        Permission.location,
+      ].request();
+
+      final denied = statuses.entries
+          .where((e) => e.value.isDenied || e.value.isPermanentlyDenied)
+          .toList();
+
+      if (denied.isNotEmpty) {
+        if (mounted) {
+          final permanentlyDenied = denied.any((e) => e.value.isPermanentlyDenied);
+          _showSnackBar(
+            permanentlyDenied
+                ? 'Откройте настройки и разрешите доступ к Bluetooth и геолокации'
+                : 'Для работы нужны разрешения Bluetooth и геолокации',
+            Colors.orange,
+            action: permanentlyDenied
+                ? SnackBarAction(
+                    label: 'Настройки',
+                    textColor: Colors.white,
+                    onPressed: () => openAppSettings(),
+                  )
+                : null,
+          );
+        }
+        return false;
+      }
+      return true;
+    } catch (e) {
       if (mounted) {
-        final permanentlyDenied = denied.any((e) => e.value.isPermanentlyDenied);
         _showSnackBar(
-          permanentlyDenied
-              ? 'Откройте настройки и разрешите доступ к Bluetooth и геолокации'
-              : 'Для работы нужны разрешения Bluetooth и геолокации',
-          Colors.orange,
-          action: permanentlyDenied
-              ? SnackBarAction(
-                  label: 'Настройки',
-                  textColor: Colors.white,
-                  onPressed: () => openAppSettings(),
-                )
-              : null,
+          'Ошибка при запросе разрешений: $e',
+          Colors.redAccent,
         );
       }
       return false;
     }
-    return true;
   }
 
   Future<void> _startScan() async {
@@ -121,19 +166,29 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
       _devices = [];
     });
 
-    await _bleService.startScan();
-
-    Future.delayed(const Duration(seconds: 10), () {
+    try {
+      await _bleService.startScan();
+    } catch (e) {
       if (mounted) {
         setState(() => _isScanning = false);
-        _bleService.stopScan();
+        _showSnackBar('Ошибка запуска поиска: $e', Colors.redAccent);
       }
-    });
+    }
+  }
+
+  Future<void> _stopScan() async {
+    await _bleService.stopScan();
+    if (mounted) {
+      setState(() => _isScanning = false);
+    }
   }
 
   Future<void> _connectToDevice(String address, String name) async {
     if (_isConnecting) return;
-    setState(() => _isConnecting = true);
+    setState(() {
+      _isConnecting = true;
+      _isScanning = false;
+    });
     await _bleService.stopScan();
     await _bleService.connect(address, name);
   }
@@ -397,20 +452,28 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
           // Scan button
           SizedBox(
             height: 50,
-            child: ElevatedButton.icon(
-              onPressed: (_isScanning || _isConnecting) ? null : _startScan,
-              icon: _isScanning
-                  ? const SizedBox(
+            child: _isScanning
+                ? OutlinedButton.icon(
+                    onPressed: _isConnecting ? null : _stopScan,
+                    style: OutlinedButton.styleFrom(
+                      side: const BorderSide(color: Colors.tealAccent),
+                      foregroundColor: Colors.tealAccent,
+                    ),
+                    icon: const SizedBox(
                       width: 20,
                       height: 20,
                       child: CircularProgressIndicator(
                         strokeWidth: 2,
-                        color: Colors.black,
+                        color: Colors.tealAccent,
                       ),
-                    )
-                  : const Icon(Icons.bluetooth_searching),
-              label: Text(_isScanning ? 'Поиск...' : 'Начать поиск'),
-            ),
+                    ),
+                    label: const Text('Остановить поиск'),
+                  )
+                : ElevatedButton.icon(
+                    onPressed: _isConnecting ? null : _startScan,
+                    icon: const Icon(Icons.bluetooth_searching),
+                    label: const Text('Начать поиск'),
+                  ),
           ),
           const SizedBox(height: 20),
 

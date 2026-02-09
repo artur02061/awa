@@ -38,6 +38,7 @@ class BleService {
   final List<BleScanBean> _devices = [];
   final List<StreamSubscription> _subscriptions = [];
   Timer? _connectionTimeout;
+  bool _continuousScanning = false;
 
   // Prefs keys
   static const _keyLastAddress = 'last_device_address';
@@ -53,6 +54,10 @@ class BleService {
       blePlugin.bleScanEveStm.listen((BleScanBean event) {
         if (event.isCompleted) {
           _scanResultsController.add(List.from(_devices));
+          // Auto-restart scan for continuous searching
+          if (_continuousScanning) {
+            _restartScan();
+          }
         } else {
           if (!_devices.any((d) => d.address == event.address)) {
             _devices.add(event);
@@ -123,20 +128,36 @@ class BleService {
 
   // ──────────── Scanning ────────────
 
+  bool get isScanning => _continuousScanning;
+
   Future<void> startScan() async {
     _devices.clear();
     _scanResultsController.add([]);
+    _continuousScanning = true;
     try {
-      await blePlugin.startScan(10 * 1000);
+      await blePlugin.startScan(30 * 1000);
     } catch (e) {
+      _continuousScanning = false;
       _errorController.add('Ошибка сканирования: $e');
     }
   }
 
   Future<void> stopScan() async {
+    _continuousScanning = false;
     try {
       await blePlugin.cancelScan();
     } catch (_) {}
+  }
+
+  /// Restart scan without clearing found devices
+  Future<void> _restartScan() async {
+    if (!_continuousScanning) return;
+    try {
+      await blePlugin.startScan(30 * 1000);
+    } catch (e) {
+      _continuousScanning = false;
+      _errorController.add('Ошибка сканирования: $e');
+    }
   }
 
   // ──────────── Connection ────────────
@@ -159,7 +180,7 @@ class BleService {
 
     try {
       await blePlugin.connect(ConnectBean(
-        autoConnect: true,
+        autoConnect: false,
         address: address,
       ));
     } catch (e) {
@@ -201,7 +222,7 @@ class BleService {
       print('Error querying firmware: $e');
     }
     try {
-      blePlugin.queryDeviceBattery();
+      await blePlugin.queryDeviceBattery();
     } catch (e) {
       print('Error querying battery: $e');
     }
